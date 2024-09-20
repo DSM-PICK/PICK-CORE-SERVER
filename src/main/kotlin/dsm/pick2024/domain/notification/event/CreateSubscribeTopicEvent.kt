@@ -14,8 +14,8 @@ class CreateSubscribeTopicEvent(
 ) : CreateSubscribeTopicEventPort {
 
     @Transactional
-    override fun execute(deviceToken: String, userId: String) {
-        val topicSubscription = queryTopicSubscriptionPort.queryAllTopicSubscriptionByUserId(userId)
+    override fun execute(deviceToken: String) {
+        val topicSubscription = queryTopicSubscriptionPort.queryAllTopicSubscriptionByDeviceToken(deviceToken)
         if (topicSubscription.isNullOrEmpty()) {
             val topicList = listOf(
                 Topic.NEW_NOTICE,
@@ -28,8 +28,7 @@ class CreateSubscribeTopicEvent(
                     TopicSubscription(
                         deviceToken = deviceToken,
                         isSubscribed = false,
-                        topic = it,
-                        userId = userId
+                        topic = it
                     )
                 )
             }

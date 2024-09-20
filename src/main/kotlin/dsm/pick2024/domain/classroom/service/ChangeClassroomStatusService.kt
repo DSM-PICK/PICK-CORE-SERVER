@@ -13,7 +13,11 @@ import dsm.pick2024.domain.classroom.port.out.DeleteClassRoomPort
 import dsm.pick2024.domain.classroom.port.out.QueryClassroomPort
 import dsm.pick2024.domain.classroom.port.out.SaveClassRoomPort
 import dsm.pick2024.domain.classroom.presentation.dto.request.ClassroomStatusRequest
+import dsm.pick2024.domain.event.classroom.SendMessageToClassroomEventPot
+import dsm.pick2024.domain.notification.port.out.QueryTopicSubscriptionPort
 import dsm.pick2024.domain.user.exception.UserNotFoundException
+import dsm.pick2024.domain.user.port.out.QueryUserPort
+import java.util.UUID
 import org.springframework.stereotype.Service
 import org.springframework.transaction.annotation.Transactional
 
@@ -23,29 +27,44 @@ class ChangeClassroomStatusService(
     private val deleteClassRoomPort: DeleteClassRoomPort,
     private val saveClassRoomPort: SaveClassRoomPort,
     private val queryAttendancePort: QueryAttendancePort,
-    private val saveAttendancePort: SaveAttendancePort
+    private val saveAttendancePort: SaveAttendancePort,
+    private val queryUserPort: QueryUserPort,
+    private val queryTopicSubscriptionPort: QueryTopicSubscriptionPort,
+    private val sendMessageToClassroomEventPot: SendMessageToClassroomEventPot
 ) : ChangeClassroomStatusUseCase {
     @Transactional
     override fun changeClassroomStatus(request: ClassroomStatusRequest) {
         if (request.status == NO) {
-            for (id in request.ids) {
-                val classroom = queryClassroomPort.findByUserId(id) ?: throw ClassroomNotFoundException
-                deleteClassRoomPort.deleteByUserId(classroom.userId)
-            }
-            return
+            handleNo(request.idList)
+        } else {
+            handleOk(request.idList)
         }
+    }
 
-        val update = mutableListOf<Classroom>()
+    private fun handleNo(idList: List<UUID>) {
+        idList.forEach { id ->
+            val classroom = queryClassroomPort.findByUserId(id) ?: throw ClassroomNotFoundException
+            val user = queryUserPort.findByXquareId(classroom.userId)!!
+            val topic = queryTopicSubscriptionPort.queryTopicSubscriptionByDeviceToken(user.deviceToken!!)
+            sendMessageToClassroomEventPot.send(user.deviceToken, NO, null, topic.isSubscribed)
+            deleteClassRoomPort.deleteByUserId(id)
+        }
+    }
+
+    private fun handleOk(idList: List<UUID>) {
+        val updateClassroomList = mutableListOf<Classroom>()
         val updateAttendanceList = mutableListOf<Attendance>()
 
-        request.ids.forEach { id ->
+        idList.forEach { id ->
             val classroom = queryClassroomPort.findByUserId(id) ?: throw ClassroomNotFoundException
-
+            val user = queryUserPort.findByXquareId(classroom.userId)!!
+            val topic = queryTopicSubscriptionPort.queryTopicSubscriptionByDeviceToken(user.deviceToken!!)
             val updatedClassroom = classroom.copy(status = OK)
-            update.add(updatedClassroom)
+
+            updateClassroomList.add(updatedClassroom)
 
             val updatedAttendance =
-                queryAttendancePort.findByUserId(classroom.userId)?.run {
+                queryAttendancePort.findByUserId(user.xquareId)?.run {
                     copy(
                         period6 = getStatus(classroom, period6, 6),
                         period7 = getStatus(classroom, period7, 7),
@@ -56,9 +75,9 @@ class ChangeClassroomStatusService(
                 } ?: throw UserNotFoundException
 
             updateAttendanceList.add(updatedAttendance)
+            sendMessageToClassroomEventPot.send(user.deviceToken, OK, classroom, topic.isSubscribed)
         }
-
-        saveClassRoomPort.saveAll(update)
+        saveClassRoomPort.saveAll(updateClassroomList)
         saveAttendancePort.saveAll(updateAttendanceList)
     }
 
